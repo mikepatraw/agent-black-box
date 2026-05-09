@@ -31,6 +31,8 @@ def render_incident_summary(run: TraceRun, compact: bool = False) -> str:
         f"session: {run.session_id or 'unknown'}",
         f"events: {run.event_count}",
     ]
+    if run.ingest_warnings:
+        lines.append(f"ingest_warnings: {len(run.ingest_warnings)}")
     if compact:
         filtered_counts = Counter(event.kind for event in run.events if event.kind in COMPACT_SKIP_EVENT_KINDS)
         lines.extend([
@@ -40,6 +42,9 @@ def render_incident_summary(run: TraceRun, compact: bool = False) -> str:
         if filtered_counts:
             detail = ", ".join(f"{kind}={count}" for kind, count in sorted(filtered_counts.items()))
             lines.append(f"filtered detail: {detail}")
+    if run.ingest_warnings:
+        lines.extend(["", "Ingest Warnings", "---------------"])
+        lines.extend(f"- {warning}" for warning in run.ingest_warnings)
     lines.extend(["", "Event Counts", "------------"])
 
     event_count_items = sorted((counts.items() if not compact else ((kind, count) for kind, count in counts.items() if kind not in COMPACT_SKIP_EVENT_KINDS)))
