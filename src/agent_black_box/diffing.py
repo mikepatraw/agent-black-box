@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from difflib import SequenceMatcher
 from typing import Any
 
 from agent_black_box.models import TraceRun
@@ -30,37 +31,25 @@ def diff_runs(left: TraceRun, right: TraceRun, compact: bool = False, focus: boo
         "",
     ]
 
-    max_len = max(len(left_events), len(right_events))
-    differences = 0
-    first_divergence = None
     event_word = "shown event" if compact else "event"
+    differences = _aligned_differences(left_events, right_events, compact=compact)
 
-    for idx in range(max_len):
-        left_event = left_events[idx] if idx < len(left_events) else None
-        right_event = right_events[idx] if idx < len(right_events) else None
-
-        if _event_signature(left_event, compact=compact) == _event_signature(right_event, compact=compact):
-            continue
-
-        if first_divergence is None:
-            first_divergence = idx + 1
-
-        differences += 1
-        label = _difference_label(left_event, right_event)
-        lines.append(f"difference {differences} ({label}) at {event_word} {idx + 1}:")
-        lines.append(f"  left : {_format_event(left_event, compact=compact)}")
-        lines.append(f"  right: {_format_event(right_event, compact=compact)}")
-        lines.append("")
-
-    if differences == 0:
+    if not differences:
         lines.append("no event-level differences detected")
         return "\n".join(lines).rstrip()
 
+    first_divergence = differences[0][1]
     summary = [
-        f"summary: {differences} difference(s)",
+        f"summary: {len(differences)} difference(s)",
         f"first divergence: {event_word} {first_divergence}",
         "",
     ]
+
+    for number, (label, index, left_event, right_event) in enumerate(differences, start=1):
+        lines.append(f"difference {number} ({label}) at {event_word} {index}:")
+        lines.append(f"  left : {_format_event(left_event, compact=compact)}")
+        lines.append(f"  right: {_format_event(right_event, compact=compact)}")
+        lines.append("")
 
     return "\n".join(lines[:4] + summary + lines[4:]).rstrip()
 
@@ -97,7 +86,7 @@ def _render_focused_diff(left: TraceRun, right: TraceRun, left_events, right_eve
         lines.append(f"right-only tools: {', '.join(right_only_tools)}")
 
     lines.extend(["", "Key Differences", "---------------"])
-    for bullet in _focused_bullets(left_events, right_events):
+    for bullet in _focused_bullets(left_events, right_events, compact=compact):
         lines.append(f"- {bullet}")
 
     lines.extend(["", "Preview", "-------"])
@@ -109,8 +98,10 @@ def _render_focused_diff(left: TraceRun, right: TraceRun, left_events, right_eve
     return "\n".join(lines).rstrip()
 
 
-def _focused_bullets(left_events, right_events) -> list[str]:
+def _focused_bullets(left_events, right_events, compact: bool) -> list[str]:
     bullets: list[str] = []
+
+    bullets.extend(_alignment_bullets(left_events, right_events, compact=compact))
 
     left_message_edit = any(event.kind == "tool_call" and event.data.get("tool") == "message" for event in left_events)
     right_message_edit = any(event.kind == "tool_call" and event.data.get("tool") == "message" for event in right_events)
@@ -138,6 +129,57 @@ def _focused_bullets(left_events, right_events) -> list[str]:
             bullets.append(f"tool usage differs for {tool} ({left_tools[tool]} vs {right_tools[tool]})")
 
     return bullets or ["no focused differences detected"]
+
+
+def _aligned_differences(left_events, right_events, compact: bool) -> list[tuple[str, int, Any, Any]]:
+    left_signatures = [_event_signature(event, compact=compact) for event in left_events]
+    right_signatures = [_event_signature(event, compact=compact) for event in right_events]
+    matcher = SequenceMatcher(a=left_signatures, b=right_signatures, autojunk=False)
+    differences: list[tuple[str, int, Any, Any]] = []
+
+    for tag, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag == "delete":
+            for offset, left_event in enumerate(left_events[left_start:left_end]):
+                differences.append(("removed event", left_start + offset + 1, left_event, None))
+            continue
+        if tag == "insert":
+            for offset, right_event in enumerate(right_events[right_start:right_end]):
+                differences.append(("added event", right_start + offset + 1, None, right_event))
+            continue
+
+        span = max(left_end - left_start, right_end - right_start)
+        for offset in range(span):
+            left_event = left_events[left_start + offset] if left_start + offset < left_end else None
+            right_event = right_events[right_start + offset] if right_start + offset < right_end else None
+            differences.append((_difference_label(left_event, right_event), min(left_start, right_start) + offset + 1, left_event, right_event))
+
+    return differences
+
+
+def _alignment_bullets(left_events, right_events, compact: bool) -> list[str]:
+    left_signatures = [_event_signature(event, compact=compact) for event in left_events]
+    right_signatures = [_event_signature(event, compact=compact) for event in right_events]
+    matcher = SequenceMatcher(a=left_signatures, b=right_signatures, autojunk=False)
+    bullets: list[str] = []
+
+    for tag, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if tag == "insert":
+            inserted = right_events[right_start:right_end]
+            bullets.append(f"right run inserts {len(inserted)} aligned event(s): {_kind_list(inserted)}")
+        elif tag == "delete":
+            deleted = left_events[left_start:left_end]
+            bullets.append(f"left run has {len(deleted)} event(s) absent from right: {_kind_list(deleted)}")
+        elif tag == "replace":
+            bullets.append(f"aligned span changes {left_end - left_start} left event(s) vs {right_end - right_start} right event(s)")
+
+    return bullets
+
+
+def _kind_list(events) -> str:
+    counts = Counter(event.kind for event in events)
+    return ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
 
 
 def _prompt_text(event) -> str | None:
