@@ -40,6 +40,8 @@ def render_timeline(run: TraceRun, compact: bool = False) -> str:
             f"events: {len(visible_events)} shown / {run.event_count} total",
             "view: compact",
         ])
+    if run.ingest_warnings:
+        lines.append(f"ingest_warnings: {len(run.ingest_warnings)}")
     lines.extend(["", "Timeline", "--------"])
 
     for idx, event in enumerate(visible_events, start=1):

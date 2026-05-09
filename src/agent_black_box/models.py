@@ -18,6 +18,7 @@ class TraceRun:
     agent: str | None = None
     session_id: str | None = None
     events: list[TraceEvent] = field(default_factory=list)
+    ingest_warnings: list[str] = field(default_factory=list)
 
     def add_event(self, event: TraceEvent) -> None:
         self.events.append(event)

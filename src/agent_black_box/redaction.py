@@ -13,6 +13,7 @@ def redact_run(run: TraceRun) -> TraceRun:
         run_id=run.run_id,
         agent=run.agent,
         session_id=run.session_id,
+        ingest_warnings=list(run.ingest_warnings),
         events=[
             TraceEvent(
                 ts=event.ts,

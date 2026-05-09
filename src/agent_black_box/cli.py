@@ -7,10 +7,11 @@ from agent_black_box.adapters import parse_trace
 from agent_black_box.banner import render_banner
 from agent_black_box.diffing import diff_runs
 from agent_black_box.filtering import filter_run
+from agent_black_box.html_report import render_html_report
+from agent_black_box.parser import TraceParseError
 from agent_black_box.redaction import redact_run
 from agent_black_box.reporting import render_incident_summary
 from agent_black_box.timeline import render_timeline
-from agent_black_box.html_report import render_html_report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     timeline_cmd.add_argument("--format", default="jsonl", choices=["jsonl", "openclaw-jsonl"], help="Trace source format")
     timeline_cmd.add_argument("--kind", action="append", dest="kinds", help="Filter to specific event kind, repeatable")
     timeline_cmd.add_argument("--redact", action="store_true", help="Redact common secret fields")
+    timeline_cmd.add_argument("--strict", action="store_true", help="Fail on malformed JSONL rows instead of skipping them")
     timeline_cmd.add_argument("--compact", action="store_true", help="Reserved for compact rendering behavior on noisy real traces")
     timeline_cmd.add_argument("--banner", action="store_true", help="Render demo banner before output")
     timeline_cmd.add_argument("--output", help="Write output to a file")
@@ -30,26 +32,28 @@ def build_parser() -> argparse.ArgumentParser:
     diff_cmd.add_argument("left", help="Path to the first trace file")
     diff_cmd.add_argument("right", help="Path to the second trace file")
     diff_cmd.add_argument("--format", default="jsonl", choices=["jsonl", "openclaw-jsonl"], help="Trace source format for both files")
+    diff_cmd.add_argument("--strict", action="store_true", help="Fail on malformed JSONL rows instead of skipping them")
+    diff_cmd.add_argument("--compact", action="store_true", help="Enable compact diff behavior on noisy real traces")
+    diff_cmd.add_argument("--focus", action="store_true", help="Render a focused diff summary instead of raw event-by-event output")
+    diff_cmd.add_argument("--banner", action="store_true", help="Render demo banner before output")
+    diff_cmd.add_argument("--output", help="Write output to a file")
 
     summary_cmd = sub.add_parser("summary", help="Export an incident-style summary from a trace file")
     summary_cmd.add_argument("trace", help="Path to trace file")
     summary_cmd.add_argument("--format", default="jsonl", choices=["jsonl", "openclaw-jsonl"], help="Trace source format")
     summary_cmd.add_argument("--kind", action="append", dest="kinds", help="Filter to specific event kind, repeatable")
     summary_cmd.add_argument("--redact", action="store_true", help="Redact common secret fields")
+    summary_cmd.add_argument("--strict", action="store_true", help="Fail on malformed JSONL rows instead of skipping them")
     summary_cmd.add_argument("--compact", action="store_true", help="Reserved for compact rendering behavior on noisy real traces")
     summary_cmd.add_argument("--banner", action="store_true", help="Render demo banner before output")
     summary_cmd.add_argument("--output", help="Write output to a file")
-
-    diff_cmd.add_argument("--compact", action="store_true", help="Enable compact diff behavior on noisy real traces")
-    diff_cmd.add_argument("--focus", action="store_true", help="Render a focused diff summary instead of raw event-by-event output")
-    diff_cmd.add_argument("--banner", action="store_true", help="Render demo banner before output")
-    diff_cmd.add_argument("--output", help="Write output to a file")
 
     report_cmd = sub.add_parser("report", help="Generate a static HTML report from one or two trace files")
     report_cmd.add_argument("trace", help="Path to primary trace file")
     report_cmd.add_argument("compare", nargs="?", help="Optional comparison trace for focused diff")
     report_cmd.add_argument("--format", default="jsonl", choices=["jsonl", "openclaw-jsonl"], help="Trace source format")
     report_cmd.add_argument("--redact", action="store_true", help="Redact common secret fields")
+    report_cmd.add_argument("--strict", action="store_true", help="Fail on malformed JSONL rows instead of skipping them")
     report_cmd.add_argument("--compact", action="store_true", help="Use compact rendering for the report sections")
     report_cmd.add_argument("--output", required=True, help="Write HTML report to a file")
     report_cmd.add_argument("--title", help="Override HTML report title")
@@ -61,9 +65,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    try:
+        return _run_command(args, parser)
+    except TraceParseError as exc:
+        parser.error(str(exc))
+    return 2
 
+
+def _run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "timeline":
-        run = parse_trace(args.trace, source_format=args.format)
+        run = parse_trace(args.trace, source_format=args.format, strict=args.strict)
         run = filter_run(run, args.kinds)
         if args.redact:
             run = redact_run(run)
@@ -72,14 +83,14 @@ def main() -> int:
         return 0
 
     if args.command == "diff":
-        left = parse_trace(args.left, source_format=args.format)
-        right = parse_trace(args.right, source_format=args.format)
+        left = parse_trace(args.left, source_format=args.format, strict=args.strict)
+        right = parse_trace(args.right, source_format=args.format, strict=args.strict)
         output = _maybe_banner(diff_runs(left, right, compact=args.compact, focus=args.focus), args.banner)
         _emit(output, args.output)
         return 0
 
     if args.command == "summary":
-        run = parse_trace(args.trace, source_format=args.format)
+        run = parse_trace(args.trace, source_format=args.format, strict=args.strict)
         run = filter_run(run, args.kinds)
         if args.redact:
             run = redact_run(run)
@@ -88,10 +99,10 @@ def main() -> int:
         return 0
 
     if args.command == "report":
-        run = parse_trace(args.trace, source_format=args.format)
+        run = parse_trace(args.trace, source_format=args.format, strict=args.strict)
         if args.redact:
             run = redact_run(run)
-        compare_run = parse_trace(args.compare, source_format=args.format) if args.compare else None
+        compare_run = parse_trace(args.compare, source_format=args.format, strict=args.strict) if args.compare else None
         if compare_run and args.redact:
             compare_run = redact_run(compare_run)
 

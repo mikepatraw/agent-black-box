@@ -1,38 +1,48 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from agent_black_box.models import TraceEvent, TraceRun
+from agent_black_box.parser import _parse_json_line
 
 
 OPENCLAW_SIMPLE_KEYS = {"run_id", "agent", "session_id", "ts", "timestamp", "event", "kind", "source"}
 OPENCLAW_SESSION_KEYS = {"type", "version", "id", "timestamp", "cwd", "parentId"}
 
 
-def parse_trace(path: str | Path, source_format: str = "jsonl") -> TraceRun:
+def parse_trace(path: str | Path, source_format: str = "jsonl", *, strict: bool = False) -> TraceRun:
     if source_format == "jsonl":
         from agent_black_box.parser import parse_jsonl_trace
 
-        return parse_jsonl_trace(path)
+        return parse_jsonl_trace(path, strict=strict)
 
     if source_format == "openclaw-jsonl":
-        return parse_openclaw_jsonl(path)
+        return parse_openclaw_jsonl(path, strict=strict)
 
     raise ValueError(f"unsupported source format: {source_format}")
 
 
-def parse_openclaw_jsonl(path: str | Path) -> TraceRun:
+def parse_openclaw_jsonl(path: str | Path, *, strict: bool = False) -> TraceRun:
     path = Path(path)
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    warnings: list[str] = []
+    rows = []
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        row = _parse_json_line(line, path=path, line_number=line_number, strict=strict, warnings=warnings)
+        if row is not None:
+            rows.append(row)
     if not rows:
-        return TraceRun(run_id="openclaw-run")
+        return TraceRun(run_id="openclaw-run", ingest_warnings=warnings)
 
     if _looks_like_openclaw_session(rows[0]):
-        return _parse_openclaw_session_rows(rows)
-
-    return _parse_openclaw_simple_rows(rows)
+        run = _parse_openclaw_session_rows(rows)
+    else:
+        run = _parse_openclaw_simple_rows(rows)
+    run.ingest_warnings.extend(warnings)
+    return run
 
 
 def _looks_like_openclaw_session(row: dict[str, Any]) -> bool:
