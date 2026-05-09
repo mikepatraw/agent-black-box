@@ -146,6 +146,62 @@ def test_diff_runs_focus_normalizes_current_time_in_prompt(tmp_path):
     assert "prompt match: yes" in rendered
 
 
+def test_diff_runs_aligns_inserted_events_without_cascading(tmp_path):
+    left_path = tmp_path / "left.jsonl"
+    right_path = tmp_path / "right.jsonl"
+
+    left_path.write_text(
+        '\n'.join(
+            [
+                '{"run_id":"left","ts":"1","kind":"prompt","source":"user","message":"do it"}',
+                '{"run_id":"left","ts":"2","kind":"tool_call","source":"assistant","tool":"exec","arguments":{"command":"pytest"}}',
+                '{"run_id":"left","ts":"3","kind":"completion","source":"assistant","message":"done"}',
+            ]
+        )
+        + '\n'
+    )
+    right_path.write_text(
+        '\n'.join(
+            [
+                '{"run_id":"right","ts":"1","kind":"prompt","source":"user","message":"do it"}',
+                '{"run_id":"right","ts":"1.5","kind":"assistant_message","source":"assistant","message":"checking first"}',
+                '{"run_id":"right","ts":"2","kind":"tool_call","source":"assistant","tool":"exec","arguments":{"command":"pytest"}}',
+                '{"run_id":"right","ts":"3","kind":"completion","source":"assistant","message":"done"}',
+            ]
+        )
+        + '\n'
+    )
+
+    left = parse_jsonl_trace(left_path)
+    right = parse_jsonl_trace(right_path)
+    rendered = diff_runs(left, right)
+
+    assert "summary: 1 difference(s)" in rendered
+    assert "difference 1 (added event) at event 2:" in rendered
+    assert "assistant_message" in rendered
+    assert "difference 2" not in rendered
+
+
+def test_diff_runs_focus_summarizes_inserted_spans(tmp_path):
+    left_path = tmp_path / "left.jsonl"
+    right_path = tmp_path / "right.jsonl"
+
+    left_path.write_text(
+        '{"run_id":"left","ts":"1","kind":"prompt","source":"user","message":"do it"}\n'
+        '{"run_id":"left","ts":"2","kind":"completion","source":"assistant","message":"done"}\n'
+    )
+    right_path.write_text(
+        '{"run_id":"right","ts":"1","kind":"prompt","source":"user","message":"do it"}\n'
+        '{"run_id":"right","ts":"1.5","kind":"tool_call","source":"assistant","tool":"exec","arguments":{"command":"pytest"}}\n'
+        '{"run_id":"right","ts":"2","kind":"completion","source":"assistant","message":"done"}\n'
+    )
+
+    rendered = diff_runs(parse_jsonl_trace(left_path), parse_jsonl_trace(right_path), focus=True)
+
+    assert "right run inserts 1 aligned event(s)" in rendered
+    assert "tool_call" in rendered
+
+
 def test_diff_runs_compact_ignores_timestamp_only_changes(tmp_path):
     left_path = tmp_path / "left-openclaw.jsonl"
     right_path = tmp_path / "right-openclaw.jsonl"
